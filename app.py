@@ -1,5 +1,6 @@
 import re
 import urllib.parse
+import math
 import streamlit as st
 import time
 import base64
@@ -165,20 +166,54 @@ MOTS_SUSPECTS = [
     "login", "secure", "account", "verify", "update", "banking",
     "paypal", "amazon", "free", "win", "prize", "urgent", "suspended",
     "confirm", "password", "wallet", "crypto", "invoice", "alert",
-    "click", "download",
+    "click", "download", "admin", "apple", "netflix", "bank", "billing",
+    "support", "service", "security", "recovery", "auth", "signin",
+    "webmail", "office365", "microsoft", "credential", "locked"
 ]
-EXTENSIONS_RISQUEES = [".xyz", ".top", ".pw", ".ru", ".tk", ".ml", ".ga", ".cf"]
+EXTENSIONS_RISQUEES = [
+    ".xyz", ".top", ".pw", ".ru", ".tk", ".ml", ".ga", ".cf", ".cc", ".su", 
+    ".click", ".gq", ".zip", ".review", ".country", ".kim", ".cricket", 
+    ".science", ".work", ".party", ".link"
+]
+
+REDUCTEURS_URL = [
+    "bit.ly", "goo.gl", "tinyurl.com", "t.co", "is.gd", "cli.gs", "yfrog.com", 
+    "migre.me", "ff.im", "tiny.cc", "url4.eu", "twit.ac", "su.pr", "twurl.nl", 
+    "snipurl.com", "short.to", "budurl.com", "ping.fm", "post.ly", "Just.as", 
+    "bkite.com", "snipr.com", "fic.kr", "loopt.us", "doiop.com", "short.ie", 
+    "kl.am", "wp.me", "rubyurl.com", "om.ly", "to.ly", "bit.do", "lnkd.in", 
+    "db.tt", "qr.ae", "adf.ly", "bitly.com", "cur.lv", "ow.ly", "ity.im", 
+    "q.gs", "po.st", "bc.vc", "twitthis.com", "u.to", "j.mp", "buzurl.com", 
+    "cutt.us", "u.bb", "yourls.org", "x.co", "prettylinkpro.com", "scrnch.me", 
+    "filoops.info", "vzturl.com", "qr.net", "1url.com", "tweez.me", "v.gd", 
+    "tr.im", "link.zip.net"
+]
 
 EXPLICATIONS = {
     "LISTE_NOIRE":   ("☠️",  "Site dangereux répertorié",      "Ce domaine est dans notre base de menaces connues — virus, arnaques ou vols de données."),
     "SANS_TLS":      ("🔓",  "Connexion non sécurisée (HTTP)",  "Le site n'utilise pas HTTPS. Vos données peuvent être interceptées."),
     "EXT_RISQUEE":   ("⚠️",  "Extension de domaine risquée",   "Les extensions .xyz, .top, .ru etc. sont massivement utilisées pour des arnaques."),
     "IP_DIRECTE":    ("🖥️",  "Adresse IP brute",                "L'URL pointe sur une adresse IP — les sites légitimes ont toujours un vrai nom de domaine."),
+    "IP_OBSCURCIE":  ("🎭",  "Adresse IP obscurcie",            "L'adresse IP est cachée sous forme hexadécimale, octale ou entière (technique d'évasion)."),
     "URL_LONGUE":    ("📏",  "URL anormalement longue",         "Les liens très longs cachent souvent la vraie destination derrière des paramètres trompeurs."),
     "SOUS_DOMAINES": ("🔗",  "Trop de sous-domaines",           "L'URL empile des sous-domaines pour imiter un site officiel."),
     "CHARS_ENCODES": ("🔀",  "Caractères suspects dans l'URL",  "Des symboles comme % ou @ masquent la vraie adresse de destination."),
     "MOTS_PHISHING": ("🎣",  "Mots-clés d'hameçonnage",         "L'URL contient des mots typiques des tentatives de phishing."),
+    "REDUCTEUR_URL": ("✂️",  "Réducteur d'URL",                 "Les réducteurs de liens masquent la vraie destination et sont souvent abusés par les attaquants."),
+    "PUNYCODE":      ("🥸",  "Caractères masqués (Punycode)",   "L'URL utilise 'xn--' pour imiter un site légitime avec d'autres alphabets (attaque homographique)."),
+    "PORT_ANORMAL":  ("🚪",  "Port réseau non standard",        "Le site utilise un port réseau inhabituel, souvent utilisé pour contourner les blocages."),
+    "TIRETS_MULT":   ("➖",  "Trop de tirets dans le domaine",  "L'abus de tirets est typique des sites frauduleux cherchant à tromper la vigilance."),
+    "ENTROPIE_ELEVEE":("🎲", "Nom de domaine aléatoire",        "Le nom de domaine ressemble à une suite de lettres aléatoires, typique des botnets (DGA)."),
 }
+
+def calculer_entropie(texte):
+    if not texte:
+        return 0
+    entropie = 0
+    for x in set(texte):
+        p_x = float(texte.count(x)) / len(texte)
+        entropie -= p_x * math.log(p_x, 2)
+    return entropie
 
 # ── Analyse ───────────────────────────────────────────────────────────────────
 def analyser_url(url):
@@ -187,21 +222,34 @@ def analyser_url(url):
         url = "http://" + url
     try:
         parsed  = urllib.parse.urlparse(url)
-        domaine = parsed.netloc.lower().replace("www.", "")
+        domaine_complet = parsed.netloc.lower()
+        if "@" in domaine_complet:
+            domaine_complet = domaine_complet.split("@")[-1]
+        if ":" in domaine_complet:
+            domaine = domaine_complet.split(":")[0]
+        else:
+            domaine = domaine_complet
+        domaine_sans_www = domaine.replace("www.", "")
     except Exception:
         rapport["details"].append(("INVALIDE", 50, "URL invalide"))
         rapport["danger"] = True
         return rapport
 
     checks = [
-        (domaine in LISTE_NOIRE,           100, "LISTE_NOIRE",   "Domaine dans la base de menaces"),
+        (domaine_sans_www in LISTE_NOIRE,   100, "LISTE_NOIRE",  "Domaine dans la base de menaces"),
         (parsed.scheme == "http",           10,  "SANS_TLS",     "Pas de chiffrement HTTPS"),
         (any(domaine.endswith(e) for e in EXTENSIONS_RISQUEES), 30, "EXT_RISQUEE",
             f"Extension risquée : {next((e for e in EXTENSIONS_RISQUEES if domaine.endswith(e)), '')}"),
         (bool(re.match(r"^\d{1,3}(\.\d{1,3}){3}$", domaine)), 40, "IP_DIRECTE",  "IP directe"),
+        (bool(re.match(r"^0x[0-9a-f]+$|^\d+$", domaine)), 50, "IP_OBSCURCIE", "IP au format hex ou entier"),
         (len(url) > 100,                    15,  "URL_LONGUE",   f"{len(url)} caractères"),
         (len(domaine.split(".")) > 4,       20,  "SOUS_DOMAINES", f"{len(domaine.split('.'))-2} niveaux"),
         ("%" in url or "@" in url,          25,  "CHARS_ENCODES", "Caractères % ou @"),
+        ("xn--" in domaine,                 60,  "PUNYCODE",     "Utilisation de Punycode (xn--)"),
+        (domaine.count('-') >= 3,           20,  "TIRETS_MULT",  f"{domaine.count('-')} tirets dans le domaine"),
+        (bool(parsed.port) and parsed.port not in [80, 443], 25, "PORT_ANORMAL", f"Port {parsed.port} utilisé"),
+        (any(red in domaine for red in REDUCTEURS_URL), 35, "REDUCTEUR_URL", "Lien raccourci détecté"),
+        (calculer_entropie(domaine_sans_www.split('.')[0]) > 4.0, 30, "ENTROPIE_ELEVEE", "Chaîne de caractères complexe/aléatoire"),
     ]
     mots = [m for m in MOTS_SUSPECTS if m in url.lower()]
     if mots:
@@ -224,8 +272,8 @@ st.markdown(f"""
     <p>Analysez n'importe quelle URL en un clic.<br>Détection de phishing, malwares et sites suspects.</p>
     <div class="hero-badges">
       <span class="badge online">● Système actif</span>
-      <span class="badge">8 signatures</span>
-      <span class="badge">8 règles</span>
+      <span class="badge">12+ signatures</span>
+      <span class="badge">14 règles</span>
       <span class="badge">100% local</span>
     </div>
   </div>
