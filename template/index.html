@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MalWatch – Terminal de sécurité</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&family=Space+Mono&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#060913;--panel:#0a101e;--line:#1b2640;--txt:#e2e8f0;--mute:#8a96b5;
+--accent:#00f0ff;--ok:#00ff41;--warn:#ff8c00;--bad:#ff003c}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+[hidden]{display:none!important}
+body{min-height:100vh;display:grid;place-items:center;padding:24px;background-color:var(--bg);color:var(--txt);
+font-family:'Rajdhani',sans-serif;font-size:18px}
+
+/* Ciel : nébuleuses, galaxies, étoiles */
+.nebula,#sky,.gx{position:fixed;z-index:-1;pointer-events:none}
+.nebula{inset:0;background:
+radial-gradient(ellipse at 12% 88%,rgba(121,40,202,.20),transparent 52%),
+radial-gradient(ellipse at 88% 8%,rgba(0,240,255,.12),transparent 48%),
+radial-gradient(ellipse at 55% 55%,rgba(255,0,127,.05),transparent 45%)}
+#sky{inset:0;width:100%;height:100%}
+.gx{opacity:.75}
+.gx canvas{width:100%;height:100%;display:block;animation:spin 420s linear infinite;will-change:transform}
+.gx1{width:min(820px,95vw);aspect-ratio:1;right:-6vw;top:-28vh;transform:scaleY(.55) rotate(-20deg);opacity:.95}
+/* Planètes (transform seul = fluide) */
+.pl{position:fixed;z-index:-1;pointer-events:none;height:auto;animation:derive 140s ease-in-out infinite alternate}
+.pl1{width:min(380px,46vw);right:-7vw;bottom:5vh}
+.pl2{width:clamp(70px,8vw,120px);left:4vw;top:8vh;animation-duration:100s}
+.pl3{width:clamp(30px,3.4vw,50px);left:46vw;top:5vh;animation-duration:170s}
+@keyframes derive{to{transform:translate3d(-34px,14px,0)}}
+/* Vaisseau */
+.ship{position:fixed;z-index:-1;pointer-events:none;top:13vh;left:0;width:min(250px,42vw);opacity:.92;
+animation:croise 140s linear infinite;will-change:transform}
+.ship svg{width:100%;display:block}
+.glow{animation:pulse 2.4s ease-in-out infinite alternate}
+@keyframes croise{from{transform:translate3d(-300px,0,0)}to{transform:translate3d(calc(100vw + 60px),40px,0)}}
+@keyframes pulse{from{opacity:.5}to{opacity:1}}
+.gx2{width:min(380px,55vw);aspect-ratio:1;left:-8vw;bottom:-10vh;transform:scaleY(.5) rotate(18deg);opacity:.55}
+@keyframes spin{to{transform:rotate(360deg)}}
+.app{display:grid;grid-template-columns:minmax(240px,4fr) 6fr;gap:48px;width:100%;max-width:1180px;align-items:center}
+
+/* Avatar */
+.stage{position:relative;height:min(560px,68vh);display:flex;align-items:flex-end;justify-content:center}
+.stage::before{content:"";position:absolute;inset:8% 0 0;background:radial-gradient(closest-side,rgba(0,240,255,.14),transparent);}
+#avatar{position:relative;max-width:100%;max-height:100%;object-fit:contain;image-rendering:pixelated}
+
+/* Bulle */
+.bubble{--accent:#00f0ff;position:relative;min-height:9.5em;padding:24px 26px;background:var(--panel);
+border:2px solid var(--accent);border-radius:12px;font:15.5px/1.7 'Space Mono',monospace;color:#b4bfdc;
+box-shadow:0 0 28px color-mix(in srgb,var(--accent) 22%,transparent);transition:border-color .3s,box-shadow .3s}
+.bubble::before{content:"";position:absolute;left:-10px;top:36px;width:18px;height:18px;background:var(--panel);
+border-left:2px solid var(--accent);border-bottom:2px solid var(--accent);transform:rotate(45deg);transition:border-color .3s}
+.cursor{display:inline-block;width:8px;height:1.1em;margin-left:3px;vertical-align:text-bottom;background:var(--accent);animation:blink 1s step-end infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* Saisie */
+.panel{display:flex;flex-direction:column;gap:20px}
+.field{display:flex;gap:10px}
+input{flex:1;min-width:0;padding:17px 18px;background:#080d1a;border:1px solid #3a2a66;border-radius:8px;color:#fff;
+font:15px 'Space Mono',monospace;outline:none;transition:border-color .2s,box-shadow .2s}
+input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,240,255,.18)}
+button{font:700 18px 'Rajdhani',sans-serif;letter-spacing:1px;color:#fff;border:0;border-radius:8px;cursor:pointer;
+transition:transform .15s,filter .15s}
+button:focus-visible{outline:2px solid #fff;outline-offset:3px}
+#go{width:100%;padding:15px;background:linear-gradient(90deg,#0052d4,#4364f7 60%,#6fb1fc)}
+#go:hover:not(:disabled){transform:translateY(-2px);filter:brightness(1.1)}
+#go:disabled{background:#2a3042;color:#8a96b5;cursor:progress}
+#paste{padding:0 20px;background:#141c33;border:1px solid var(--line);color:var(--mute)}
+#paste:hover{color:#fff;border-color:var(--accent)}
+
+/* Résultats */
+.results{--c:var(--ok);display:grid;grid-template-columns:1fr 190px;gap:18px;animation:in .4s ease-out}
+@keyframes in{from{opacity:0;transform:translateY(8px)}}
+.card{background:var(--panel);border:1px solid var(--c);border-radius:10px;padding:20px}
+.card h3{font-size:22px;color:var(--c);margin-bottom:4px}
+.target{font:13px 'Space Mono',monospace;color:var(--mute);word-break:break-all;margin-bottom:14px}
+ul{list-style:none;display:grid;gap:8px;max-height:230px;overflow:auto}
+li{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:baseline;font-size:16px;line-height:1.3}
+li b{font:12.5px 'Space Mono',monospace;color:#fff;display:block}
+li span{color:var(--mute)}
+li em{font:12px 'Space Mono',monospace;font-style:normal;color:var(--bad)}
+li.good em{color:var(--ok)}
+.gauge{display:grid;place-items:center;text-align:center}
+.ring{position:relative;width:130px;height:130px}
+.ring svg{width:100%;height:100%;transform:rotate(-90deg)}
+.ring circle{fill:none;stroke-width:9}
+.ring .bg{stroke:#18213a}
+.ring .fg{stroke:var(--c);stroke-linecap:round;stroke-dasharray:326.7;stroke-dashoffset:326.7;transition:stroke-dashoffset 1s cubic-bezier(.2,.8,.2,1)}
+.ring strong{position:absolute;inset:0;display:grid;place-items:center;font-size:38px}
+.gauge small{margin-top:8px;color:var(--mute);font-size:15px}
+
+@media(max-width:860px){
+.app{grid-template-columns:1fr;gap:20px}
+.stage{height:260px}
+.bubble::before{display:none}
+.results{grid-template-columns:1fr}
+}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="nebula"></div>
+<div class="gx gx1"><canvas id="g1"></canvas></div>
+<div class="gx gx2"><canvas id="g2"></canvas></div>
+<canvas id="sky"></canvas>
+<canvas class="pl pl1" id="p1"></canvas>
+<canvas class="pl pl2" id="p2"></canvas>
+<canvas class="pl pl3" id="p3"></canvas>
+<div class="ship" aria-hidden="true">
+<svg viewBox="0 0 320 130" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="hl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f1f5fb"/><stop offset=".55" stop-color="#aab5c8"/><stop offset="1" stop-color="#5a6479"/></linearGradient>
+    <linearGradient id="hd" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8e99ae"/><stop offset="1" stop-color="#3c4558"/></linearGradient>
+    <filter id="fl" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="3"/></filter>
+  </defs>
+  <!-- nacelle lointaine -->
+  <path d="M104 30 L112 30 L134 76 L122 76 Z" fill="url(#hd)"/>
+  <rect x="40" y="20" width="112" height="11" rx="5.5" fill="url(#hd)"/>
+  <!-- nacelle proche -->
+  <path d="M98 47 L112 47 L136 78 L120 78 Z" fill="url(#hd)"/>
+  <rect x="26" y="36" width="126" height="13" rx="6.5" fill="url(#hl)"/>
+  <rect x="40" y="41" width="96" height="3" rx="1.5" fill="#6fd0ff" opacity=".9"/>
+  <ellipse cx="150" cy="42.5" rx="6" ry="6.5" fill="#ff5a36"/>
+  <g class="glow"><ellipse cx="26" cy="42.5" rx="9" ry="7" fill="#58c4ff" filter="url(#fl)"/><ellipse cx="38" cy="25.5" rx="8" ry="5" fill="#58c4ff" filter="url(#fl)"/></g>
+  <!-- coque secondaire + déflecteur -->
+  <rect x="96" y="76" width="112" height="18" rx="9" fill="url(#hl)"/>
+  <circle cx="204" cy="86" r="5" fill="#8fe0ff"/>
+  <g class="glow"><circle cx="204" cy="86" r="8" fill="#58c4ff" filter="url(#fl)"/></g>
+  <!-- cou + soucoupe -->
+  <path d="M206 62 L238 62 L204 78 L184 78 Z" fill="url(#hd)"/>
+  <ellipse cx="240" cy="52" rx="72" ry="14" fill="url(#hl)"/>
+  <ellipse cx="240" cy="46" rx="22" ry="7" fill="#dbe3ef"/>
+  <ellipse cx="240" cy="42" rx="9" ry="3.5" fill="#f4f7fc"/>
+  <path d="M174 53 H306" stroke="#ffe9a8" stroke-width="1.2" stroke-dasharray="1.5 3.5" opacity=".8"/>
+  <ellipse cx="240" cy="52" rx="72" ry="14" fill="none" stroke="#fff" stroke-opacity=".25"/>
+</svg>
+</div>
+<main class="app">
+  <div class="stage"><img id="avatar" alt="Agent MalWatch"></div>
+
+  <section class="panel">
+    <div class="bubble" id="bubble" role="status" aria-live="polite"><span id="txt"></span><span class="cursor" id="cursor"></span></div>
+
+    <div>
+      <div class="field">
+        <input id="url" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://domaine-a-verifier.com" aria-label="Lien à analyser">
+        <button id="paste" type="button" title="Coller depuis le presse-papiers">Coller</button>
+      </div>
+    </div>
+    <button id="go" type="button">Analyser le lien</button>
+
+    <div class="results" id="results" hidden>
+      <div class="card">
+        <h3 id="title"></h3>
+        <p class="target" id="target"></p>
+        <ul id="list"></ul>
+      </div>
+      <div class="card gauge">
+        <div class="ring">
+          <svg viewBox="0 0 120 120"><circle class="bg" cx="60" cy="60" r="52"/><circle class="fg" id="fg" cx="60" cy="60" r="52"/></svg>
+          <strong id="score">0</strong>
+        </div>
+        <small>indice de risque</small>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+// ── Réglages ────────────────────────────────────────────────────────────────
+const NB_IMAGES = {fixe:3, parler:5, chercher:2, gagner:1, perdu:1};
+const VITESSE   = {fixe:1500, parler:240, chercher:400, gagner:1000, perdu:1000};
+const MS_PAR_CARACTERE = 20;
+// Si la page n'est pas servie par FastAPI (Live Server, fichier local…), on vise l'API directement.
+const API = (location.protocol === 'file:' || (location.port && location.port !== '8000')) ? 'http://127.0.0.1:8000' : '';
+const COULEURS = {sain:'#00ff41', suspect:'#ff8c00', danger:'#ff003c'};
+const $ = id => document.getElementById(id);
+const reduit = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ── Avatar : images préchargées, changement de src instantané (aucun clignotement) ─
+const poses = {};
+for (const [nom, n] of Object.entries(NB_IMAGES)) {
+  poses[nom] = Array.from({length:n}, (_, i) => { const im = new Image(); im.src = `${nom}/${i+1}.png`; im.decode?.().catch(()=>{}); return im; });
+}
+let poseActuelle = null, timerPose = null;
+function pose(nom) {
+  if (nom === poseActuelle) return;
+  poseActuelle = nom; clearInterval(timerPose);
+  const imgs = poses[nom]; let i = 0;
+  $('avatar').src = imgs[0].src;
+  if (imgs.length > 1) timerPose = setInterval(() => { i = (i + 1) % imgs.length; $('avatar').src = imgs[i].src; }, VITESSE[nom]);
+}
+
+// ── Machine à écrire : 1 nœud texte, piloté par requestAnimationFrame ──────
+let jeton = 0;
+const noeud = $('txt').appendChild(document.createTextNode(''));
+function dire(texte, {couleur = '#00f0ff', anim = 'parler', repos = 'fixe'} = {}) {
+  const id = ++jeton;
+  $('bubble').style.setProperty('--accent', couleur);
+  $('cursor').hidden = false;
+  pose(anim);
+  const fin = () => { if (id !== jeton) return; noeud.nodeValue = texte; $('cursor').hidden = true; pose(repos); };
+  if (reduit) return fin();
+  const t0 = performance.now(); let dernier = -1;
+  requestAnimationFrame(function pas(now) {
+    if (id !== jeton) return;
+    const n = Math.min(texte.length, Math.max(0, Math.floor((now - t0) / MS_PAR_CARACTERE)));
+    if (n !== dernier) { noeud.nodeValue = texte.slice(0, n); dernier = n; }
+    n < texte.length ? requestAnimationFrame(pas) : fin();
+  });
+}
+
+// ── Analyse ─────────────────────────────────────────────────────────────────
+async function analyser() {
+  const url = $('url').value.trim();
+  if (!url) { dire("Attention. Donne-moi une cible : colle un lien dans le terminal, sans l'ouvrir.", {couleur:'#ff8c00'}); $('url').focus(); return; }
+
+  occupe(true); $('results').hidden = true;
+  dire("Recherche en cours… j'analyse la structure du lien et je compare mes signatures.", {couleur:'#ff007f', anim:'chercher', repos:'chercher'});
+  const ctrl = new AbortController(), coupe = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const [rep] = await Promise.all([
+      fetch(`${API}/api/analyze`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url}), signal:ctrl.signal}),
+      new Promise(r => setTimeout(r, 1200))   // durée minimale pour que l'animation reste lisible
+    ]);
+    if (!rep.ok) throw new Error('code ' + rep.status);
+    afficher(await rep.json(), url);
+  } catch (e) {
+    dire(`Erreur : le serveur d'analyse ne répond pas (${e.name === 'AbortError' ? 'délai dépassé' : e.message}). Lance « python app.py » puis ouvre http://127.0.0.1:8000.`,
+         {couleur:'#ff003c', anim:'perdu', repos:'perdu'});
+  } finally { clearTimeout(coupe); occupe(false, true); }
+}
+
+function occupe(etat, fini) {
+  $('go').disabled = etat;
+  $('go').textContent = etat ? 'Inspection en cours…' : fini ? 'Analyser un autre lien' : 'Analyser le lien';
+}
+
+function afficher(r, url) {
+  const c = COULEURS[r.niveau];
+  const textes = {
+    danger:  [`ALERTE ROUGE ! Anomalies graves détectées : risque ${r.score}/100. Je te déconseille d'ouvrir ce lien.`, 'perdu', 'Menace probable'],
+    suspect: [`Prudence. Mon radar relève des éléments suspects (${r.score}/100). Reste vigilant.`, 'fixe', 'Signaux suspects'],
+    sain:    [`C'est bon ! Aucun signal inquiétant sur ce lien (${r.score}/100). Reste prudent malgré tout.`, 'gagner', 'Lien sain']
+  }[r.niveau];
+  dire(textes[0], {couleur:c, anim:'parler', repos:textes[1]});
+
+  const res = $('results');
+  res.style.setProperty('--c', c);
+  $('title').textContent = textes[2];
+  $('target').textContent = url;
+
+  const liste = $('list'); liste.replaceChildren();
+  const lignes = r.details.length ? r.details : [['OK', 0, 'Aucun comportement suspect signalé.']];
+  for (const [code, pts, msg] of lignes) {
+    const li = document.createElement('li'); if (pts <= 0) li.className = 'good';
+    const ico = document.createElement('div'); ico.textContent = pts > 0 ? '⚠️' : '✅';
+    const corps = document.createElement('div'); const b = document.createElement('b'), s = document.createElement('span');
+    b.textContent = code; s.textContent = msg; corps.append(b, s);
+    const em = document.createElement('em'); em.textContent = pts > 0 ? '+' + pts : pts < 0 ? String(pts) : '';
+    li.append(ico, corps, em); liste.append(li);
+  }
+
+  res.hidden = false;
+  const fg = $('fg'); fg.style.strokeDashoffset = 326.7;
+  requestAnimationFrame(() => requestAnimationFrame(() => fg.style.strokeDashoffset = 326.7 * (1 - r.score / 100)));
+  const t0 = performance.now();
+  (function compte(now) {
+    const k = Math.min(1, (now - t0) / 900);
+    $('score').textContent = Math.round(r.score * (1 - Math.pow(1 - k, 3)));
+    if (k < 1) requestAnimationFrame(compte);
+  })(t0);
+}
+
+// ── Événements ──────────────────────────────────────────────────────────────
+$('go').addEventListener('click', analyser);
+$('url').addEventListener('keydown', e => { if (e.key === 'Enter') analyser(); });
+$('paste').addEventListener('click', async () => {
+  try { $('url').value = (await navigator.clipboard.readText()).trim(); $('url').focus(); } catch { $('url').focus(); }
+});
+
+// ── Ciel : étoiles scintillantes, étoiles filantes, galaxies spirales ───────
+(() => {
+  const cv = $('sky'), ctx = cv.getContext('2d');
+  const dpr = Math.min(devicePixelRatio || 1, 1.5);
+  let W, H, etoiles = [], filantes = [], suivante = 1.5, dernier = 0;
+
+  // Galaxie spirale dessinée UNE fois, puis simplement tournée par le CSS (très léger)
+  function galaxie(canvas, size, h1, h2) {
+    canvas.width = canvas.height = size;
+    const g = canvas.getContext('2d'), c = size / 2;
+    const halo = g.createRadialGradient(c, c, 0, c, c, c);
+    halo.addColorStop(0, 'rgba(255,244,225,.95)');
+    halo.addColorStop(.12, 'rgba(255,214,170,.45)');
+    halo.addColorStop(.45, `hsla(${h1},80%,55%,.10)`);
+    halo.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = halo; g.fillRect(0, 0, size, size);
+    for (let i = 0; i < 3200; i++) {
+      const k = Math.pow(Math.random(), .8), r = k * c * .96;
+      const a = k * 5.2 + (i % 2) * Math.PI + (Math.random() + Math.random() - 1) * (.5 + (1 - k) * .6);
+      g.fillStyle = `hsla(${h1 + (h2 - h1) * k},${70 + 20 * k}%,${70 - 20 * k}%,${.15 + Math.random() * .55})`;
+      const s = Math.random() * 1.3 + .5;
+      g.fillRect(c + Math.cos(a) * r, c + Math.sin(a) * r, s, s);
+    }
+  }
+
+  function taille() {
+    W = innerWidth; H = innerHeight;
+    cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const teintes = ['#ffffff', '#ffffff', '#ffffff', '#a8e4ff', '#ffd6ee'];
+    etoiles = Array.from({length: Math.min(420, Math.round(W * H / 4500))}, (_, i) => ({
+      x: Math.random() * W, y: Math.random() * H, r: i < 12 ? 1.5 : Math.random() * 1.1 + .3, big: i < 12,
+      p: Math.random() * 6.28, v: Math.random() * 1.6 + .4, c: teintes[Math.floor(Math.random() * 5)]
+    }));
+    dessine(0);
+  }
+
+  function filante() {
+    const a = (.15 + Math.random() * .2) * Math.PI, v = 700 + Math.random() * 600;
+    filantes.push({x: W * (.25 + Math.random() * .75), y: Math.random() * H * .45,
+                   vx: -Math.cos(a) * v, vy: Math.sin(a) * v, age: 0, vie: .9 + Math.random() * .6});
+  }
+
+  function dessine(t) {
+    ctx.clearRect(0, 0, W, H);
+    for (const s of etoiles) {
+      ctx.globalAlpha = .3 + .7 * (.5 + .5 * Math.sin(t * s.v + s.p));
+      ctx.fillStyle = s.c;
+      if (s.r > .9) { ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 6.283); ctx.fill(); }
+      else ctx.fillRect(s.x, s.y, s.r * 1.6, s.r * 1.6);
+      if (s.big) { ctx.fillRect(s.x - 6, s.y - .3, 12, .6); ctx.fillRect(s.x - .3, s.y - 6, .6, 12); }
+    }
+    ctx.lineCap = 'round'; ctx.lineWidth = 1.8;
+    for (const f of filantes) {
+      const al = Math.sin(Math.PI * f.age / f.vie), qx = f.x - f.vx * .16, qy = f.y - f.vy * .16;
+      const gr = ctx.createLinearGradient(f.x, f.y, qx, qy);
+      gr.addColorStop(0, '#ffffff'); gr.addColorStop(1, 'rgba(120,200,255,0)');
+      ctx.globalAlpha = al; ctx.strokeStyle = gr;
+      ctx.beginPath(); ctx.moveTo(f.x, f.y); ctx.lineTo(qx, qy); ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(f.x, f.y, 1.8, 0, 6.283); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function boucle(ms) {
+    const t = ms / 1000, dt = Math.min(.05, t - dernier); dernier = t;
+    if ((suivante -= dt) <= 0) { filante(); if (Math.random() < .25) filante(); suivante = 2.5 + Math.random() * 4; }
+    for (const f of filantes) { f.x += f.vx * dt; f.y += f.vy * dt; f.age += dt; }
+    filantes = filantes.filter(f => f.age < f.vie);
+    dessine(t); requestAnimationFrame(boucle);
+  }
+
+  // Planète dessinée une fois : dégradé, bandes, ombre côté nuit, halo, anneaux éventuels
+  function planete(canvas, w, h, R, base, o = {}) {
+    canvas.width = w; canvas.height = h;
+    const g = canvas.getContext('2d'), cx = w / 2, cy = h / 2, PI2 = Math.PI * 2;
+    const anneau = (a, b) => {
+      g.save(); g.translate(cx, cy); g.rotate(-.35); g.scale(1, .28);
+      for (const [k, l, al] of [[1.45, 14, .55], [1.7, 22, .35], [1.95, 8, .5]]) {
+        g.beginPath(); g.arc(0, 0, R * k, a, b); g.lineWidth = l; g.strokeStyle = `rgba(${o.anneau},${al})`; g.stroke();
+      }
+      g.restore();
+    };
+    if (o.anneau) anneau(Math.PI, PI2);
+    g.save(); g.shadowColor = o.halo; g.shadowBlur = R * .35;
+    const s = g.createRadialGradient(cx - R * .4, cy - R * .4, R * .1, cx, cy, R);
+    s.addColorStop(0, base[0]); s.addColorStop(1, base[1]);
+    g.fillStyle = s; g.beginPath(); g.arc(cx, cy, R, 0, PI2); g.fill(); g.restore();
+    g.save(); g.beginPath(); g.arc(cx, cy, R, 0, PI2); g.clip();
+    if (o.bandes) for (let y = -R; y < R; y += R / 9) {
+      g.fillStyle = `rgba(${o.bandes},${.08 + Math.random() * .16})`;
+      g.fillRect(cx - R, cy + y, 2 * R, R / 9 * (.4 + Math.random() * .8));
+    }
+    const n = g.createRadialGradient(cx - R * .55, cy - R * .5, R * .2, cx - R * .1, cy - R * .1, R * 1.25);
+    n.addColorStop(0, 'rgba(0,0,0,0)'); n.addColorStop(.6, 'rgba(0,0,10,.35)'); n.addColorStop(1, 'rgba(0,0,10,.92)');
+    g.fillStyle = n; g.fillRect(cx - R, cy - R, 2 * R, 2 * R); g.restore();
+    if (o.anneau) anneau(0, Math.PI);
+  }
+  planete($('p1'), 520, 340, 105, ['#f2d9a0', '#a8743a'], {bandes: '120,70,30', anneau: '230,205,160', halo: '#ffcf8a'});
+  planete($('p2'), 140, 140, 48, ['#8fd3ff', '#1e5fa8'], {bandes: '255,255,255', halo: '#5ac8ff'});
+  planete($('p3'), 70, 70, 24, ['#ff9a7a', '#8a2a1c'], {halo: '#ff6a4a'});
+
+  galaxie($('g1'), 640, 200, 300);
+  galaxie($('g2'), 420, 300, 340);
+  taille();
+  let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(taille, 150); });
+  if (!reduit) requestAnimationFrame(boucle);
+})();
+
+pose('fixe');
+dire("Salutations, je suis une IA pour t'aider à naviguer en toute sécurité. Copie le lien du site à vérifier sans l'ouvrir, colle-le ci-dessous, puis lance l'analyse. je m'occupe du reste!");
+</script>
+</body>
+</html>

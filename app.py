@@ -1,362 +1,220 @@
-import re
-import urllib.parse
 import math
-import streamlit as st
-import time
-import base64
+import re
+from collections import Counter
+from functools import lru_cache
+from pathlib import Path
+from urllib.parse import urlparse
 
-# ── Config ────────────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="MalWatch — Détecteur de Sites Malveillants",
-    page_icon="🛡️",
-    layout="centered",
-    initial_sidebar_state="collapsed",
-)
+import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
-# ── Image ─────────────────────────────────────────────────────────────────────
-def charger_image_base64(chemin):
-    try:
-        with open(chemin, "rb") as f:
-            return base64.b64encode(f.read()).decode()
-    except FileNotFoundError:
-        return ""
+BASE = Path(__file__).resolve().parent
 
-img_b64 = charger_image_base64("lh.png")
-img_html = (
-    f'<img src="data:image/png;base64,{img_b64}" class="avatar">'
-    if img_b64
-    else '<div class="avatar-placeholder">🕵️</div>'
-)
-
-# ── CSS (statique, affiché une seule fois, jamais remplacé) ───────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
-
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-html, body, [data-testid="stAppViewContainer"] {
-    background: #0f1117 !important;
-    color: #e2e8f0 !important;
-    font-family: 'Inter', sans-serif !important;
-}
-[data-testid="stHeader"], #MainMenu, footer,
-[data-testid="stToolbar"], [data-testid="stSidebar"] { display: none !important; }
-.block-container { padding: 0 !important; max-width: 680px !important; margin: auto; }
-
-/* Hero */
-.hero {
-    padding: 40px 36px 28px;
-    display: flex; align-items: center; gap: 24px;
-    border-bottom: 1px solid #1e2535; margin-bottom: 8px;
-}
-.avatar {
-    width: 82px; height: 82px; border-radius: 50%;
-    object-fit: cover; border: 2px solid #3b82f6;
-    box-shadow: 0 0 18px #3b82f618; flex-shrink: 0;
-}
-.avatar-placeholder {
-    width: 82px; height: 82px; border-radius: 50%;
-    background: #1e2535; border: 2px solid #3b82f6;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 28px; flex-shrink: 0;
-}
-.hero-text h1 { font-size: 26px; font-weight: 700; color: #f8fafc; }
-.hero-text h1 span { color: #3b82f6; }
-.hero-text p  { margin-top: 4px; font-size: 13px; color: #64748b; line-height: 1.5; }
-.hero-badges  { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
-.badge {
-    font-size: 11px; padding: 2px 9px; border-radius: 20px;
-    background: #1e2535; color: #94a3b8; border: 1px solid #2d3748;
-    font-family: 'JetBrains Mono', monospace;
-}
-.badge.online { color: #22c55e; border-color: #22c55e30; background: #22c55e0d; }
-
-/* Label URL */
-.url-label {
-    font-size: 11px; font-weight: 600; color: #475569;
-    letter-spacing: 1.5px; text-transform: uppercase;
-    padding: 20px 36px 6px;
-}
-
-/* Input + bouton */
-[data-testid="stTextInput"] { padding: 0 36px !important; }
-[data-testid="stTextInput"] input {
-    background: #141824 !important; border: 1.5px solid #2d3748 !important;
-    border-radius: 10px !important; color: #f1f5f9 !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    font-size: 14px !important; padding: 13px 15px !important;
-}
-[data-testid="stTextInput"] input:focus {
-    border-color: #3b82f6 !important;
-    box-shadow: 0 0 0 3px #3b82f610 !important;
-}
-[data-testid="stButton"] { padding: 0 36px !important; margin-top: 8px; }
-[data-testid="stButton"] button {
-    background: #3b82f6 !important; color: #fff !important;
-    font-family: 'Inter', sans-serif !important; font-weight: 600 !important;
-    font-size: 14px !important; border: none !important;
-    border-radius: 10px !important; padding: 13px 24px !important;
-    width: 100% !important; cursor: pointer !important;
-}
-[data-testid="stButton"] button:hover { background: #2563eb !important; }
-
-/* Zone résultat — on utilise les composants natifs Streamlit, on les stylise */
-[data-testid="stMetric"] { padding: 0 !important; }
-
-/* Metric principale (score) */
-div[data-testid="stMetricValue"] > div {
-    font-size: 42px !important; font-weight: 800 !important;
-    font-family: 'Inter', sans-serif !important;
-}
-
-/* Progress bar */
-[data-testid="stProgressBar"] > div > div {
-    border-radius: 6px !important;
-}
-
-/* Colonnes résultat */
-.result-cols { padding: 0 36px; }
-
-/* Carte alerte individuelle via st.info / st.warning / st.error */
-[data-testid="stNotification"] {
-    border-radius: 10px !important;
-    font-family: 'Inter', sans-serif !important;
-    font-size: 14px !important;
-}
-
-/* Expander log */
-[data-testid="stExpander"] { margin: 0 36px !important; }
-[data-testid="stExpander"] summary {
-    font-size: 12px !important; color: #475569 !important;
-    font-family: 'JetBrains Mono', monospace !important;
-}
-.log-box {
-    background: #0d1117; border: 1px solid #1e2535; border-radius: 8px;
-    padding: 12px 16px; font-family: 'JetBrains Mono', monospace;
-    font-size: 11.5px; line-height: 2; color: #475569;
-}
-.log-ok   { color: #22c55e; }
-.log-err  { color: #ef4444; }
-.log-warn { color: #f59e0b; }
-.log-info { color: #3b82f6; }
-
-/* Padding général zone résultat */
-.zone-resultat { padding: 20px 36px 0; }
-
-/* Footer */
-.footer {
-    padding: 22px 36px 32px; margin-top: 24px;
-    border-top: 1px solid #1e2535;
-    display: flex; justify-content: space-between;
-}
-.footer-l { font-size: 12px; color: #334155; }
-.footer-l strong { color: #475569; }
-.footer-r { font-size: 11px; color: #1e2535; font-family: 'JetBrains Mono', monospace; }
-</style>
-""", unsafe_allow_html=True)
-
-# ── Données ───────────────────────────────────────────────────────────────────
-LISTE_NOIRE = {
+# ── Données de référence (tuples / frozenset = immuables et rapides) ──────────
+LISTE_NOIRE = frozenset({
     "malware.com", "phishing-site.net", "evil-domain.ru",
     "free-virus.xyz", "steal-data.top", "hack-you.pw",
-    "click-here-win.com", "update-virus.info",
-}
-MOTS_SUSPECTS = [
-    "login", "secure", "account", "verify", "update", "banking",
-    "paypal", "amazon", "free", "win", "prize", "urgent", "suspended",
-    "confirm", "password", "wallet", "crypto", "invoice", "alert",
-    "click", "download", "admin", "apple", "netflix", "bank", "billing",
-    "support", "service", "security", "recovery", "auth", "signin",
-    "webmail", "office365", "microsoft", "credential", "locked"
-]
-EXTENSIONS_RISQUEES = [
-    ".xyz", ".top", ".pw", ".ru", ".tk", ".ml", ".ga", ".cf", ".cc", ".su", 
-    ".click", ".gq", ".zip", ".review", ".country", ".kim", ".cricket", 
-    ".science", ".work", ".party", ".link"
-]
+})
+TLD_RISQUES = frozenset({"xyz", "top", "pw", "ru", "tk", "ml", "ga", "cf", "cc", "su", "click", "zip", "work", "gq"})
+RACCOURCISSEURS = frozenset({"bit.ly", "goo.gl", "tinyurl.com", "t.co", "is.gd", "ow.ly", "cutt.ly"})
+MOTS_SUSPECTS = ("login", "signin", "secure", "account", "verify", "update", "banking", "password",
+                 "confirm", "wallet", "suspend", "gratuit", "free", "bonus", "colis")
+MARQUES = ("paypal", "amazon", "google", "microsoft", "apple", "adobe", "netflix", "facebook",
+           "instagram", "whatsapp", "linkedin", "dropbox", "orange", "laposte", "ameli", "impots",
+           "boursorama", "creditagricole", "bnpparibas", "societegenerale", "chronopost",
+           "colissimo", "steam", "discord", "binance", "coinbase")
+DOMAINES_SURS = frozenset({
+    "paypal.com", "amazon.com", "amazon.fr", "google.com", "google.fr", "microsoft.com", "apple.com",
+    "adobe.com", "netflix.com", "facebook.com", "instagram.com", "whatsapp.com", "linkedin.com",
+    "dropbox.com", "orange.fr", "laposte.fr", "ameli.fr", "impots.gouv.fr", "boursorama.com",
+    "credit-agricole.fr", "bnpparibas.com", "societegenerale.fr", "chronopost.fr", "colissimo.fr",
+    "steampowered.com", "discord.com", "binance.com", "coinbase.com", "github.com", "wikipedia.org",
+    "youtube.com", "anthropic.com", "claude.ai",
+})
+SLD = frozenset({"co", "com", "org", "net", "gouv", "gov", "ac"})
+LEET = str.maketrans("01358", "oleba")
+RE_IPV4 = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+RE_IP_OBFUSQUEE = re.compile(r"^(0x[0-9a-f]+|\d{8,10})$", re.I)
 
-REDUCTEURS_URL = [
-    "bit.ly", "goo.gl", "tinyurl.com", "t.co", "is.gd", "cli.gs", "yfrog.com", 
-    "migre.me", "ff.im", "tiny.cc", "url4.eu", "twit.ac", "su.pr", "twurl.nl", 
-    "snipurl.com", "short.to", "budurl.com", "ping.fm", "post.ly", "Just.as", 
-    "bkite.com", "snipr.com", "fic.kr", "loopt.us", "doiop.com", "short.ie", 
-    "kl.am", "wp.me", "rubyurl.com", "om.ly", "to.ly", "bit.do", "lnkd.in", 
-    "db.tt", "qr.ae", "adf.ly", "bitly.com", "cur.lv", "ow.ly", "ity.im", 
-    "q.gs", "po.st", "bc.vc", "twitthis.com", "u.to", "j.mp", "buzurl.com", 
-    "cutt.us", "u.bb", "yourls.org", "x.co", "prettylinkpro.com", "scrnch.me", 
-    "filoops.info", "vzturl.com", "qr.net", "1url.com", "tweez.me", "v.gd", 
-    "tr.im", "link.zip.net"
-]
+# ── Modèle : régression logistique  p = σ(biais +  poids·x)
 
-EXPLICATIONS = {
-    "LISTE_NOIRE":   ("☠️",  "Site dangereux répertorié",      "Ce domaine est dans notre base de menaces connues — virus, arnaques ou vols de données."),
-    "SANS_TLS":      ("🔓",  "Connexion non sécurisée (HTTP)",  "Le site n'utilise pas HTTPS. Vos données peuvent être interceptées."),
-    "EXT_RISQUEE":   ("⚠️",  "Extension de domaine risquée",   "Les extensions .xyz, .top, .ru etc. sont massivement utilisées pour des arnaques."),
-    "IP_DIRECTE":    ("🖥️",  "Adresse IP brute",                "L'URL pointe sur une adresse IP — les sites légitimes ont toujours un vrai nom de domaine."),
-    "IP_OBSCURCIE":  ("🎭",  "Adresse IP obscurcie",            "L'adresse IP est cachée sous forme hexadécimale, octale ou entière (technique d'évasion)."),
-    "URL_LONGUE":    ("📏",  "URL anormalement longue",         "Les liens très longs cachent souvent la vraie destination derrière des paramètres trompeurs."),
-    "SOUS_DOMAINES": ("🔗",  "Trop de sous-domaines",           "L'URL empile des sous-domaines pour imiter un site officiel."),
-    "CHARS_ENCODES": ("🔀",  "Caractères suspects dans l'URL",  "Des symboles comme % ou @ masquent la vraie adresse de destination."),
-    "MOTS_PHISHING": ("🎣",  "Mots-clés d'hameçonnage",         "L'URL contient des mots typiques des tentatives de phishing."),
-    "REDUCTEUR_URL": ("✂️",  "Réducteur d'URL",                 "Les réducteurs de liens masquent la vraie destination et sont souvent abusés par les attaquants."),
-    "PUNYCODE":      ("🥸",  "Caractères masqués (Punycode)",   "L'URL utilise 'xn--' pour imiter un site légitime avec d'autres alphabets (attaque homographique)."),
-    "PORT_ANORMAL":  ("🚪",  "Port réseau non standard",        "Le site utilise un port réseau inhabituel, souvent utilisé pour contourner les blocages."),
-    "TIRETS_MULT":   ("➖",  "Trop de tirets dans le domaine",  "L'abus de tirets est typique des sites frauduleux cherchant à tromper la vigilance."),
-    "ENTROPIE_ELEVEE":("🎲", "Nom de domaine aléatoire",        "Le nom de domaine ressemble à une suite de lettres aléatoires, typique des botnets (DGA)."),
-}
-
-def calculer_entropie(texte):
-    if not texte:
-        return 0
-    entropie = 0
-    for x in set(texte):
-        p_x = float(texte.count(x)) / len(texte)
-        entropie -= p_x * math.log(p_x, 2)
-    return entropie
-
-# ── Analyse ───────────────────────────────────────────────────────────────────
-def analyser_url(url):
-    rapport = {"url": url, "danger": False, "score": 0, "details": []}
-    if not url.startswith(("http://", "https://")):
-        url = "http://" + url
-    try:
-        parsed  = urllib.parse.urlparse(url)
-        domaine_complet = parsed.netloc.lower()
-        if "@" in domaine_complet:
-            domaine_complet = domaine_complet.split("@")[-1]
-        if ":" in domaine_complet:
-            domaine = domaine_complet.split(":")[0]
-        else:
-            domaine = domaine_complet
-        domaine_sans_www = domaine.replace("www.", "")
-    except Exception:
-        rapport["details"].append(("INVALIDE", 50, "URL invalide"))
-        rapport["danger"] = True
-        return rapport
-
-    checks = [
-        (domaine_sans_www in LISTE_NOIRE,   100, "LISTE_NOIRE",  "Domaine dans la base de menaces"),
-        (parsed.scheme == "http",           10,  "SANS_TLS",     "Pas de chiffrement HTTPS"),
-        (any(domaine.endswith(e) for e in EXTENSIONS_RISQUEES), 30, "EXT_RISQUEE",
-            f"Extension risquée : {next((e for e in EXTENSIONS_RISQUEES if domaine.endswith(e)), '')}"),
-        (bool(re.match(r"^\d{1,3}(\.\d{1,3}){3}$", domaine)), 40, "IP_DIRECTE",  "IP directe"),
-        (bool(re.match(r"^0x[0-9a-f]+$|^\d+$", domaine)), 50, "IP_OBSCURCIE", "IP au format hex ou entier"),
-        (len(url) > 100,                    15,  "URL_LONGUE",   f"{len(url)} caractères"),
-        (len(domaine.split(".")) > 4,       20,  "SOUS_DOMAINES", f"{len(domaine.split('.'))-2} niveaux"),
-        ("%" in url or "@" in url,          25,  "CHARS_ENCODES", "Caractères % ou @"),
-        ("xn--" in domaine,                 60,  "PUNYCODE",     "Utilisation de Punycode (xn--)"),
-        (domaine.count('-') >= 3,           20,  "TIRETS_MULT",  f"{domaine.count('-')} tirets dans le domaine"),
-        (bool(parsed.port) and parsed.port not in [80, 443], 25, "PORT_ANORMAL", f"Port {parsed.port} utilisé"),
-        (any(red in domaine for red in REDUCTEURS_URL), 35, "REDUCTEUR_URL", "Lien raccourci détecté"),
-        (calculer_entropie(domaine_sans_www.split('.')[0]) > 4.0, 30, "ENTROPIE_ELEVEE", "Chaîne de caractères complexe/aléatoire"),
-    ]
-    mots = [m for m in MOTS_SUSPECTS if m in url.lower()]
-    if mots:
-        checks.append((True, len(mots) * 10, "MOTS_PHISHING", ", ".join(mots[:5])))
-
-    for cond, pts, code, msg in checks:
-        if cond:
-            rapport["score"] += pts
-            rapport["details"].append((code, pts, msg))
-
-    rapport["danger"] = rapport["score"] >= 30
-    return rapport
-
-# ── Hero statique ─────────────────────────────────────────────────────────────
-st.markdown(f"""
-<div class="hero">
-  {img_html}
-  <div class="hero-text">
-    <h1>Mal<span>Watch</span></h1>
-    <p>Analysez n'importe quelle URL en un clic.<br>Détection de phishing, malwares et sites suspects.</p>
-    <div class="hero-badges">
-      <span class="badge online">● Système actif</span>
-      <span class="badge">12+ signatures</span>
-      <span class="badge">14 règles</span>
-      <span class="badge">100% local</span>
-    </div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# ── Saisie ────────────────────────────────────────────────────────────────────
-st.markdown('<div class="url-label">URL à analyser</div>', unsafe_allow_html=True)
-
-url_saisie = st.text_input(
-    label="url", value="", placeholder="https://exemple.com",
-    label_visibility="collapsed",
+CARACTERISTIQUES = (
+    ("LISTE_NOIRE",    8.0, "Domaine connu comme malveillant"),
+    ("SANS_TLS",       0.6, "Connexion non chiffrée (HTTP)"),
+    ("TLD_RISQUE",     1.6, "Extension de domaine souvent abusée"),
+    ("IP_DIRECTE",     2.4, "Adresse IP à la place d'un nom de domaine"),
+    ("IP_OBFUSQUEE",   3.0, "Adresse IP masquée (hexadécimal / décimal)"),
+    ("URL_LONGUE",     0.8, "Lien anormalement long"),
+    ("SOUS_DOMAINES",  1.0, "Trop de sous-domaines"),
+    ("ARROBASE",       2.2, "Identifiant caché avant le « @ » : technique de leurre"),
+    ("ENCODAGE",       0.9, "Caractères encodés (%) pour masquer l'adresse"),
+    ("PUNYCODE",       1.8, "Caractères trompeurs (homographes IDN)"),
+    ("RACCOURCISSEUR", 1.5, "Lien raccourci : destination cachée"),
+    ("ENTROPIE",       1.4, "Nom de domaine d'aspect aléatoire"),
+    ("CHIFFRES",       1.0, "Proportion élevée de chiffres dans le nom"),
+    ("TIRETS",         0.9, "Nombreux tirets dans le nom de domaine"),
+    ("MOTS_PHISHING",  1.1, "Vocabulaire typique du phishing"),
+    ("TYPOSQUATTING",  3.6, "Imite l'orthographe d'une grande marque"),
+    ("MARQUE_USURPEE", 3.2, "Utilise le nom d'une marque sans lui appartenir"),
+    ("DOMAINE_SUR",   -4.5, "Domaine officiel d'une marque reconnue"),
 )
-clic = st.button("🔍  Analyser l'URL")
+BIAIS = -3.4
+IDX = {c[0]: i for i, c in enumerate(CARACTERISTIQUES)}
 
-# ── Session state ─────────────────────────────────────────────────────────────
-if "rapport" not in st.session_state:
-    st.session_state.rapport = None
 
-if clic and url_saisie.strip():
-    st.session_state.rapport = analyser_url(url_saisie.strip())
-elif clic and not url_saisie.strip():
-    st.warning("Veuillez saisir une URL avant de lancer l'analyse.")
+def entropie(texte: str) -> float:
+    if not texte:
+        return 0.0
+    n = len(texte)
+    return -sum(f / n * math.log2(f / n) for f in Counter(texte).values())
 
-# ── Affichage résultat (100% composants natifs Streamlit) ─────────────────────
-rapport = st.session_state.rapport
 
-if rapport is not None:
-    score  = min(rapport["score"], 100)
-    danger = rapport["danger"]
-    url    = rapport["url"]
+def levenshtein(a: str, b: str) -> int:
+    if abs(len(a) - len(b)) > 2:
+        return 3
+    prec = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prec[j] + 1, cur[j - 1] + 1, prec[j - 1] + (ca != cb)))
+        prec = cur
+    return prec[-1]
 
+
+def clamp(v: float) -> float:
+    return 0.0 if v < 0 else 1.0 if v > 1 else v
+
+
+def domaine_enregistre(labels: list) -> list:
+    """Retourne les labels du domaine principal (gère .co.uk, .gouv.fr…)."""
+    if len(labels) >= 3 and labels[-2] in SLD and len(labels[-1]) == 2:
+        return labels[-3:]
+    return labels[-2:]
+
+
+def extraire(url: str):
+    """Transforme l'URL en vecteur de caractéristiques (tuple aligné sur CARACTERISTIQUES)."""
+    p = urlparse(url)
+    hote = (p.hostname or "").lower().rstrip(".")
+    if not hote or " " in hote or ("." not in hote and ":" not in hote):
+        raise ValueError("hôte invalide")
+    labels = hote.split(".")
+    reg_labels = domaine_enregistre(labels)
+    reg = ".".join(reg_labels)
+    nom = reg_labels[0] if len(reg_labels) > 1 else hote
+    tld = labels[-1]
+    sur = reg in DOMAINES_SURS
+    texte = hote + (p.path or "").lower() + (p.query or "").lower()
+    ip = bool(RE_IPV4.match(hote))
+
+    x = [0.0] * len(CARACTERISTIQUES)
+    x[IDX["LISTE_NOIRE"]] = float(reg in LISTE_NOIRE)
+    x[IDX["SANS_TLS"]] = float(p.scheme == "http")
+    x[IDX["TLD_RISQUE"]] = float(tld in TLD_RISQUES)
+    x[IDX["IP_DIRECTE"]] = float(ip)
+    x[IDX["IP_OBFUSQUEE"]] = float(bool(RE_IP_OBFUSQUEE.match(hote)))
+    x[IDX["URL_LONGUE"]] = clamp((len(url) - 75) / 100)
+    x[IDX["SOUS_DOMAINES"]] = clamp((len(labels) - len(reg_labels) - 1) / 3)
+    x[IDX["ARROBASE"]] = float("@" in p.netloc)
+    x[IDX["ENCODAGE"]] = clamp(url.count("%") / 5)
+    x[IDX["PUNYCODE"]] = float("xn--" in hote)
+    x[IDX["RACCOURCISSEUR"]] = float(reg in RACCOURCISSEURS)
+    if not ip and len(nom) >= 8:
+        x[IDX["ENTROPIE"]] = clamp((entropie(nom) - 3.0) / 1.2)
+    if not ip and len(nom) >= 4:
+        x[IDX["CHIFFRES"]] = clamp(sum(c.isdigit() for c in nom) / len(nom) * 3)
+    x[IDX["TIRETS"]] = clamp(hote.count("-") / 3)
+    x[IDX["MOTS_PHISHING"]] = clamp(sum(m in texte for m in MOTS_SUSPECTS) / 3)
+    x[IDX["DOMAINE_SUR"]] = float(sur)
+
+    if not sur and not ip:
+        norm = nom.translate(LEET)
+        for m in MARQUES:
+            if nom != m and (norm == m or (len(m) >= 5 and levenshtein(norm, m) <= 1)):
+                x[IDX["TYPOSQUATTING"]] = 1.0
+                break
+        for m in MARQUES:
+            if m in hote:
+                x[IDX["MARQUE_USURPEE"]] = 1.0
+                break
+            if m in texte:
+                x[IDX["MARQUE_USURPEE"]] = max(x[IDX["MARQUE_USURPEE"]], 0.5)
+    return tuple(x)
+
+
+@lru_cache(maxsize=4096)
+def analyser_url(url: str) -> dict:
+    brut = url.strip()
+    url = brut if re.match(r"^[a-z][a-z0-9+.-]*://", brut, re.I) else "http://" + brut
     try:
-        parsed  = urllib.parse.urlparse(url if "://" in url else "http://" + url)
-        domaine = parsed.netloc or url
-    except Exception:
-        domaine = url
+        x = extraire(url)
+    except ValueError:
+        return {"url": brut, "score": 50, "niveau": "suspect", "danger": False,
+                "details": (("INVALIDE", 50, "Adresse illisible ou incomplète."),)}
 
-    st.markdown("---")
+    z = BIAIS
+    details = []
+    for (code, poids, msg), v in zip(CARACTERISTIQUES, x):
+        if v:
+            z += poids * v
+            details.append((code, round(poids * v * 10), msg))
+    details.sort(key=lambda d: -d[1])
+    score = round(100 / (1 + math.exp(-z)))
+    niveau = "danger" if score >= 50 else "suspect" if score >= 20 else "sain"
+    return {"url": brut, "score": score, "niveau": niveau,
+            "danger": niveau == "danger", "details": tuple(details)}
 
-    # ── Verdict principal ──
-    if danger:
-        st.error(f"## 🚨 Menace détectée\n\n**Ne visitez pas ce site.** Ne saisissez aucune information personnelle et ne téléchargez rien.\n\n`{domaine}`")
-    elif score > 0:
-        st.warning(f"## ⚠️ Site suspect\n\nCe site présente des points suspects. Vérifiez l'adresse attentivement avant de continuer.\n\n`{domaine}`")
-    else:
-        st.success(f"## ✅ Aucune menace détectée\n\nNous n'avons détecté aucun signe de danger. Ce site semble sûr.\n\n`{domaine}`")
 
-    # ── Score visuel ──
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.metric(label="Score de risque", value=f"{score} / 100")
-        st.progress(score / 100)
+# ── Serveur FastAPI ───────────────────────────────────────────────────────────
+app = FastAPI(title="MalWatch API", version="2.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-    st.markdown("")
 
-    # ── Explications des problèmes ──
-    if not rapport["details"]:
-        st.info("🛡️ **Tout est en ordre** — Connexion sécurisée, domaine inconnu des bases de menaces, aucun mot-clé suspect.")
-    else:
-        st.markdown("**Problèmes détectés :**")
-        for code, pts, _ in rapport["details"]:
-            icone, titre, desc = EXPLICATIONS.get(code, ("⚠️", code, _))
-            if pts >= 30:
-                st.error(f"{icone} **{titre}**\n\n{desc}")
-            else:
-                st.warning(f"{icone} **{titre}**\n\n{desc}")
+class AnalyzeRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
 
-    # ── Journal technique (dépliable) ──
-    with st.expander("📋 Journal technique"):
-        heure  = time.strftime("%H:%M:%S")
-        lignes = [f"[{heure}] Analyse → {url}"]
-        for code, pts, _ in rapport["details"]:
-            titre_log = EXPLICATIONS.get(code, ("", code, _))[1]
-            lignes.append(f"  [{code}] +{pts}pts — {titre_log}")
-        vlabel = "DANGEREUX" if danger else ("SUSPECT" if score > 0 else "SUR")
-        lignes.append(f"  Score final : {score}/100 → {vlabel}")
-        st.code("\n".join(lignes), language=None)
 
-# ── Footer statique ───────────────────────────────────────────────────────────
-st.markdown("""
-<div class="footer">
-  <div class="footer-l"><strong>MalWatch v2.0</strong> — Analyse 100% locale, aucune donnée transmise</div>
-  <div class="footer-r">© 2026</div>
-</div>
-""", unsafe_allow_html=True)
+@app.post("/api/analyze")
+def api_analyze_url(req: AnalyzeRequest):
+    return analyser_url(req.url)
+
+
+@app.get("/api/health")
+def health():
+    return {"ok": True}
+
+
+def trouver(nom: str):
+    """Cherche un fichier/dossier à la racine du projet, puis dans template/ ou static/."""
+    for base in (BASE, BASE / "template", BASE / "templates", BASE / "static"):
+        if (base / nom).exists():
+            return base / nom
+    return None
+
+
+@app.get("/")
+def serve_frontend():
+    page = trouver("index.html")
+    if page is None:
+        return HTMLResponse(f"<h3>index.html introuvable</h3><p>Place-le dans : {BASE}</p>", status_code=404)
+    return FileResponse(page)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return Response(status_code=204)
+
+
+# Dossiers d'images de l'avatar (/fixe/1.png, /parler/2.png…)
+for dossier in ("fixe", "parler", "chercher", "gagner", "perdu"):
+    chemin = trouver(dossier)
+    if chemin and chemin.is_dir():
+        app.mount(f"/{dossier}", StaticFiles(directory=chemin), name=dossier)
+
+if __name__ == "__main__":
+    print("MalWatch → http://127.0.0.1:8000")
+    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)
